@@ -17,7 +17,21 @@ namespace tts {
     void await_resume() noexcept {}
   };
 
+  struct TaskSuspendAwaiter {
+    bool await_ready() noexcept { return false; }
+    bool await_suspend(std::coroutine_handle<> h) noexcept {
+      LOG_PRINT("[awaiter(s)] suspend and self-suspend\n");
+
+      Scheduler& sched = Scheduler::instance();
+      TaskID id = sched.getTaskID(h);
+      sched.requestSuspend(id);
+      return true;
+    }
+    void await_resume() noexcept {}
+  };
+
   struct TaskSleepAwaiter {
+    uint64_t sleep_ms = 0;
     bool await_ready() noexcept { return false; }
     bool await_suspend(std::coroutine_handle<> h) noexcept {
       LOG_PRINT("[awaiter(s)] sleep and euqueue block\n");

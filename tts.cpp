@@ -10,8 +10,30 @@ namespace tts
   //   return Scheduler::instance().registerTask(name, task());
   // }
 
+// scheduling
 void start_scheduler() {
   Scheduler::instance().run();
+}
+
+// task utilities
+TaskState get_task_state(std::string task_name) {
+  Scheduler& sched = Scheduler::instance();
+  return sched.getTaskState(sched.getTaskID(task_name));
+}
+
+// task operating
+bool task_suspend(std::string task_name) {
+  Scheduler& sched = Scheduler::instance(); 
+  TaskID id = sched.getTaskID(task_name);
+
+  return sched.requestSuspend(id);
+}
+
+bool task_resume(std::string task_name) {
+  Scheduler& sched = Scheduler::instance();
+  TaskID id = sched.getTaskID(task_name);
+
+  return sched.requestResume(id);
 }
 
 }

@@ -7,4 +7,3 @@ FLAGS = -std=c++20
 ${TARGET}: ${SRC} ${LIB_SRCS} ${HEADERS}
 	g++ -o $@ ${SRC} ${LIB_SRCS} ${FLAGS} -g
 
-# all: ${SRC} ${LIB_SRCS}

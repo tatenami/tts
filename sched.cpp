@@ -68,6 +68,28 @@ void Scheduler::enqueueFinish(std::coroutine_handle<> h) {
   LOG_PRINTF("[sched] enqueue ready task(id=%d)\n", (int)(tcb.id));
 }
 
+bool Scheduler::requestSuspend(TaskID id) {
+  TaskControlBlock& tcb = *(tcb_list_[id]);
+  if (tcb.state == TaskState::Suspended) {
+    return false;
+  }
+
+  LOG_PRINTF("[sched] set suspend task(id=%d)\n", (int)(tcb.id));
+  tcb.state = TaskState::Suspended;
+  return true;
+}
+
+bool Scheduler::requestResume(TaskID id) {
+  TaskControlBlock& tcb = *(tcb_list_[id]);
+  if (tcb.state != TaskState::Suspended) {
+    return false;
+  }
+
+  tcb.state = TaskState::Ready;
+  enqueueReady(tcb.handler);
+  return true;
+}
+
 void Scheduler::removeReady(std::coroutine_handle<> h) {
   TaskControlBlock& tcb = getTCBFromHandler(h);
 
@@ -84,12 +106,13 @@ void Scheduler::run() {
     ready_queue_.pop();
 
     if (tcb->state != TaskState::Ready) {
-      std::printf("[sched] task is not ready\n");
+      // std::printf("[sched] task is not ready\n");
       continue;
     }
 
-    LOG_PRINTF("[sched] resume task(id=%d)\n", (int)(tcb.id));
+    LOG_PRINTF("[sched] resume task(id=%d)\n", (int)(tcb->id));
     tcb->state = TaskState::Running;
+    running_task_id_ = tcb->id;
     tcb->handler.resume();
   }
 }

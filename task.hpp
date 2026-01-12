@@ -13,25 +13,6 @@ using namespace std;
 namespace tts 
 {
 
-struct TaskControlBlock {
-  TaskID id;
-  TaskState state;
-  std::coroutine_handle<> handler;
-
-  TaskControlBlock(TaskID id_, TaskState state_, std::coroutine_handle<> handler_):
-    id(id_), state(state_), handler(handler_) 
-    {
-
-    }
-
-  ~TaskControlBlock() {
-    std::printf("[tcb] destructor.\n");
-    if (handler) {
-      handler.destroy();
-    }
-  }
-};
-
 struct TaskPromise;
 
 struct Task {

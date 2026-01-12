@@ -25,10 +25,11 @@ class TaskIDAllocator {
 class Scheduler {
   using HandlerAddr = void*;
 
-  private:
+ private:
   Scheduler() = default;
   ~Scheduler() = default;
 
+  TaskID running_task_id_;
   std::array<std::unique_ptr<TaskControlBlock>, MAX_TASK_NUM> tcb_list_;
   std::unordered_map<std::string, TaskID> name_to_id_;
   std::unordered_map<HandlerAddr, TaskID> handler_to_id_;
@@ -46,7 +47,7 @@ class Scheduler {
     return *(tcb_list_[id]);
   }
 
-  public:
+ public:
   Scheduler(const Scheduler&) = delete;
   Scheduler& operator=(const Scheduler&) = delete;
   Scheduler(const Scheduler&&) = delete;
@@ -57,9 +58,25 @@ class Scheduler {
     return instance;
   }
 
+  TaskID getTaskID(std::string task_name) {
+    return name_to_id_[task_name];
+  }
+
+  TaskID getTaskID(std::coroutine_handle<> h) {
+    return handler_to_id_[h.address()];
+  }
+
+  TaskState getTaskState(TaskID id) {
+    return tcb_list_.at(id).get()->state;
+  }
+
+
   TaskID registerTask(std::string name, Task&& task);
   void enqueueReady(std::coroutine_handle<> h);
   void enqueueFinish(std::coroutine_handle<> h);
+  bool requestSuspend(TaskID id);
+  bool requestResume(TaskID id);
+  void registerSleep();
   void removeReady(std::coroutine_handle<> h);
   void cleanTask(std::coroutine_handle<> h);
   void run();
