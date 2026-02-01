@@ -2,12 +2,12 @@
 #define TASK_TYPES_H
 
 #include <cstdint>
+#include "tts_config.h"
 
 namespace tts 
 {
 
 using TaskID = uint32_t;
-static constexpr TaskID MAX_TASK_NUM = 10;
 constexpr TaskID NameDuplicationErr = (MAX_TASK_NUM + 1);
 
 enum class TaskState {
