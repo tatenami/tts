@@ -22,5 +22,6 @@ typedef struct {
 #define TTS_IOCTL_MAGIC 0xAA
 
 #define TTS_SLEEP_REQ_CMD _IOW(TTS_IOCTL_MAGIC, 1, ioctl_sleep_req_arg)
+#define TTS_GET_EXPIRED_COUNT_CMD _IOR(TTS_IOCTL_MAGIC, 2, uint8_t)
 
 #endif // TTS_IOCTL_H
