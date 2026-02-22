@@ -24,7 +24,7 @@ class TimerBridge {
   bool addRequest(task_id_t id, uint64_t ns);
   bool hasExpiredIDs() const;
   void wait(int32_t timeout_ms = -1);
-  size_t readExpiredIDs(task_id_t *buf, size_t max_ids = MAX_TASK_NUM);
+  expired_bitmap_t readExpiredIDMap();
 };
 
 }

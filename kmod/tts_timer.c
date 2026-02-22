@@ -31,10 +31,9 @@ struct task_timer {
 
 struct proc_timer_ctx {
   struct task_timer timers[MAX_TASK_NUM];
-  DECLARE_KFIFO(expired_ids, task_id_t, 16);
+  expired_bitmap_t expired_bitmap;
   spinlock_t lock;
   wait_queue_head_t wq;
-  bool cancel_req;
 };
 
 /* Module Finctions */
@@ -43,20 +42,13 @@ static enum hrtimer_restart timer_callback(struct hrtimer *t) {
   struct task_timer *ttimer = container_of(t, struct task_timer, timer);
   struct proc_timer_ctx* ctx = ttimer->ctx;
 
-  pr_info("tts_timer: ttimer callback (task_id=%d)", ttimer->task_id);
+  // pr_info("tts_timer: ttimer callback (task_id=%d)", ttimer->task_id);
 
-  spin_lock(&(ctx->lock));
-
-  if (!kfifo_put(&(ctx->expired_ids), ttimer->task_id)) {
-    pr_info("tts_timer: kfifo is full\n");
-  }
-
-  spin_unlock(&(ctx->lock));
+  set_bit(ttimer->task_id, &(ctx->expired_bitmap));
   // 割り込み可能状態な対応プロセスを実行状態へ
   wake_up_interruptible(&(ctx->wq));
 
-  int len = kfifo_len(&(ctx->expired_ids));
-  pr_info("  kfifo elements = %d\n", len);
+  // pr_info("  bitmap: %0x\n", ctx->expired_bitmap);
 
   // タイマーを再度起動させない
   return HRTIMER_NORESTART;
@@ -65,11 +57,9 @@ static enum hrtimer_restart timer_callback(struct hrtimer *t) {
 static struct proc_timer_ctx* proc_timer_ctx_create(void) {
   struct proc_timer_ctx *ctx = kzalloc(sizeof(struct proc_timer_ctx), GFP_KERNEL);
 
-  ctx->cancel_req = false;
-
-  INIT_KFIFO(ctx->expired_ids);
   spin_lock_init(&(ctx->lock));
   init_waitqueue_head(&(ctx->wq));
+  ctx->expired_bitmap = 0;
 
   for (size_t i = 0; i < MAX_TASK_NUM; i++) {
     ctx->timers[i].task_id = i;
@@ -89,7 +79,7 @@ static void proc_timer_ctx_destroy(struct proc_timer_ctx *ctx) {
 }
 
 static int tts_timer_open(struct inode *inode, struct file *file) {
-  pr_info("tts_timer: (pid=%d) open\n", current->pid);
+  // pr_info("tts_timer: (pid=%d) open\n", current->pid);
 
   struct proc_timer_ctx *ctx = proc_timer_ctx_create();
   if (ctx == NULL) {
@@ -101,7 +91,7 @@ static int tts_timer_open(struct inode *inode, struct file *file) {
 }
 
 static long tts_timer_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
-  pr_info("tts_timer: (pid=%d) ioctl\n", current->pid);
+  // pr_info("tts_timer: (pid=%d) ioctl\n", current->pid);
 
   struct proc_timer_ctx *ctx = (struct proc_timer_ctx *)(file->private_data);
 
@@ -124,19 +114,17 @@ static long tts_timer_ioctl(struct file *file, unsigned int cmd, unsigned long a
       struct hrtimer *timer = &(ctx->timers[task_id].timer);
       ktime_t sleep_time = ktime_set(0, sleep_ns);
 
-      pr_info("tts_timer: (pid=%d) Add timer (task_id=%d, ns=%lu)\n", current->pid, task_id, sleep_ns);
+      // pr_info("  Add timer (task_id=%d, ns=%lu)\n", task_id, sleep_ns);
       hrtimer_start(timer, sleep_time, HRTIMER_MODE_REL);
       break;
     }
-    case TTS_GET_EXPIRED_COUNT_CMD: {
-      uint8_t count;
-      unsigned long flags;
+    case TTS_HAS_EXPIRED_CMD: {
+      uint8_t has_expired;
+      has_expired = (READ_ONCE(ctx->expired_bitmap) != 0) ? 1 : 0;
+      
+      // pr_info("  has_expired: %d\n", has_expired);
 
-      spin_lock_irqsave(&(ctx->lock), flags);
-      count = kfifo_len(&(ctx->expired_ids));
-      spin_unlock_irqrestore(&(ctx->lock), flags);
-
-      int ret = copy_to_user((uint8_t __user *)arg, &count, sizeof(count));
+      int ret = copy_to_user((uint8_t __user *)arg, &has_expired, sizeof(has_expired));
       if(ret) {
         pr_info("tts_timer: failed copy_to_user\n");
         return -EFAULT;
@@ -144,38 +132,7 @@ static long tts_timer_ioctl(struct file *file, unsigned int cmd, unsigned long a
 
       break;
     }
-    case TTS_GET_TASK_TIMER_ACTIVE: {
-      task_id_t task_id;
-      int ret = copy_from_user(&task_id, (task_id_t __user *)arg, sizeof(task_id));
-      
-      if (ret) {
-        pr_info("tts_timer: failed copy_from_user\n");
-        return 0;
-      }
-
-      if (task_id >= MAX_TASK_NUM) {
-        pr_info("tts_timer: task_id is lager than MAX\n");
-        return -EINVAL;
-      }
-
-      struct proc_timer_ctx *ctx = (struct proc_timer_ctx *)(file->private_data);
-      struct hrtimer *timer = &(ctx->timers[task_id].timer);
-      
-      uint8_t is_active = 0;
-
-      if (hrtimer_is_queued(timer)) {
-        is_active = 1;
-      }
-
-      ret = copy_to_user((uint8_t __user *)arg, &is_active, sizeof(is_active));
-      if (ret) {
-        pr_info("tts_timer: failed copy_to_user\n");
-        return -EFAULT;
-      }
-
-      break;
-    }
-    case TTS_CANCEL_SLEEP_CMD: {
+    case TTS_ABORT_SLEEP_CMD: {
       task_id_t task_id;
       int ret = copy_from_user(&task_id, (task_id_t __user *)arg, sizeof(task_id));
       if (ret) {
@@ -193,6 +150,24 @@ static long tts_timer_ioctl(struct file *file, unsigned int cmd, unsigned long a
 
       hrtimer_cancel(timer);
 
+      if (test_bit(task_id, &(ctx->expired_bitmap))) {
+        clear_bit(task_id, &(ctx->expired_bitmap));
+      }
+
+      break;
+    }
+    case TTS_GET_EXPIRED_BITMAP_CMD: {
+      expired_bitmap_t bitmap = xchg(&(ctx->expired_bitmap), 0);
+
+      int ret = copy_to_user((expired_bitmap_t __user *)arg, &bitmap, sizeof(bitmap));
+     
+      // pr_info("  expired bitmap: %0x\n", READ_ONCE(bitmap));
+
+      if (ret) {
+        pr_info("tts_timer: failed copy_from_user\n");
+        return -EFAULT;
+      }
+
       break;
     }
   }
@@ -201,56 +176,28 @@ static long tts_timer_ioctl(struct file *file, unsigned int cmd, unsigned long a
 }
 
 static __poll_t tts_timer_poll(struct file *file, struct poll_table_struct *ptable) {
-  pr_info("tts_timer: (pid=%d) poll\n", current->pid);
+  // pr_info("tts_timer: (pid=%d) poll\n", current->pid);
 
   __poll_t mask = 0;
   struct proc_timer_ctx *ctx = (struct proc_timer_ctx *)(file->private_data);
 
   poll_wait(file, &(ctx->wq), ptable);
 
-  unsigned long flags;
-  spin_lock_irqsave(&(ctx->lock), flags);
-
-  // キューが空でないなら即復帰
-  if (!kfifo_is_empty(&(ctx->expired_ids))) {
+  if (READ_ONCE(ctx->expired_bitmap) != 0) {
     mask |= (POLLIN | POLLRDNORM);
-  }  
-  spin_unlock_irqrestore(&(ctx->lock), flags);
+  }
   
   return mask;
 }
 
 static ssize_t tts_timer_read(struct file *file, char __user *buf, size_t count, loff_t *ppos) {
-  pr_info("tts_timer: (pid=%d) read\n", current->pid);
+  // pr_info("tts_timer: (pid=%d) read\n", current->pid);
 
-  struct proc_timer_ctx *ctx = (struct proc_timer_ctx *)(file->private_data);
-  uint32_t copied_size;
-
-  if (count <= 0) {
-    return -EINVAL;
-  }
-
-  size_t max = count - (count % sizeof(task_id_t));
-
-  unsigned long flags;
-  spin_lock_irqsave(&(ctx->lock), flags);
-
-  if (kfifo_is_empty(&(ctx->expired_ids))) {
-    spin_unlock_irqrestore(&(ctx->lock), flags);
-    return -EAGAIN;
-  }
-
-  // キューの全要素をpopしてdevfileへコピー
-  kfifo_to_user(&(ctx->expired_ids), buf, max, &copied_size);
-
-  spin_unlock_irqrestore(&(ctx->lock), flags);
-  pr_info("tts_timer: (pid=%d) copy to user (fifo ids) size: %d\n", current->pid, copied_size);
-
-  return copied_size;
+  return 0;
 }
 
 static int tts_timer_release(struct inode *inode, struct file *file) {
-  pr_info("tts_timer: (pid=%d) release\n", current->pid);
+  // pr_info("tts_timer: (pid=%d) release\n", current->pid);
 
   proc_timer_ctx_destroy((struct proc_timer_ctx *)(file->private_data));
   return 0;

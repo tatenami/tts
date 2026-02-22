@@ -34,27 +34,23 @@ void TaskIDAllocator::free(task_id_t id) {
 task_id_t Scheduler::registerTask(std::string name, Task&& task) {
   if (name_to_id_.contains(name)) {
     std::printf("[sched] ERR: duplication task name: %s\n", name.c_str());
-    task.handler = nullptr;
+    task.handler.destroy();
     return NameDuplicationErr;
   }
 
-  std::unique_ptr<TaskControlBlock> tcb;
   task_id_t id = id_allocator_.allocate();
+  std::unique_ptr<TaskControlBlock> tcb;
 
   tcb = std::make_unique<TaskControlBlock>(
     id, TaskState::Ready, std::move(task.handler)
   );
 
-  HandlerAddr addr = tcb->handler.address();
-
   // 各マップに登録
   name_to_id_[name] = id;
-  handler_to_id_[addr] = id;
+  handler_to_id_[tcb->handler.address()] = id;
   tcb_list_[id] = std::move(tcb);
-  registered_tasks_++;
+  num_tasks_++;
 
-  LOG_PRINTF("[sched] register task: %s(id=%d) addr:%p\n", name.c_str(), id, addr);
-  enqueueReady(tcb_list_[id]->handler);
   return id;
 }
 
@@ -113,6 +109,11 @@ bool Scheduler::requestSleep(std::coroutine_handle<> h, uint64_t sleep_ns) {
     return false;
   }
 
+  // 秒数が0なら単にyield
+  if (sleep_ns == 0) {
+    enqueueReady(h);
+  }
+
   if (!kernel_timer_.addRequest(tcb.id, sleep_ns)) {
     return false;
   }
@@ -132,6 +133,10 @@ void Scheduler::removeReady(std::coroutine_handle<> h) {
 void Scheduler::run() {
   LOG_PRINT("[sched] run.\n");
 
+  for (int i = 0; i < num_tasks_; i++) {
+    enqueueReady(i);
+  }
+
   while (!allTaskFinished()) {
     if (ready_queue_.empty()) {
       if (!kernel_timer_.hasExpiredIDs()) {
@@ -140,11 +145,15 @@ void Scheduler::run() {
     }
 
     if (kernel_timer_.hasExpiredIDs()) { 
-      task_id_t expired_ids[MAX_TASK_NUM];
-      int count = kernel_timer_.readExpiredIDs(expired_ids);
+      expired_bitmap_t bitmap = kernel_timer_.readExpiredIDMap();
 
-      for (int i = 0; i < count; i++) {
-        TaskControlBlock& tcb = *(tcb_list_.at(expired_ids[i]));
+      for (int i = 0; i < num_tasks_; i++) {
+        // ビットが立っていないIDをスキップ
+        if (((bitmap >> i) & 0x01) == 0) {
+          continue;
+        }
+
+        TaskControlBlock& tcb = *(tcb_list_.at(i));
         
         if (tcb.state == TaskState::Blocked) {  
           tcb.state = TaskState::Ready;

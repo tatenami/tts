@@ -36,7 +36,7 @@ class Scheduler {
   Scheduler() = default;
   ~Scheduler() = default;
 
-  uint8_t registered_tasks_{0};
+  uint8_t num_tasks_{0};
   task_id_t running_task_id_;
   std::array<std::unique_ptr<TaskControlBlock>, MAX_TASK_NUM> tcb_list_;
   std::unordered_map<std::string, task_id_t> name_to_id_;
@@ -59,7 +59,7 @@ class Scheduler {
   }
 
   bool allTaskFinished() {
-    return (registered_tasks_ == finish_queue_.size());
+    return (num_tasks_ == finish_queue_.size());
   }
 
  public:
@@ -82,7 +82,7 @@ class Scheduler {
   }
 
   TaskState getTaskState(task_id_t id) {
-    return tcb_list_.at(id).get()->state;
+    return (tcb_list_.at(id)).get()->state;
   }
 
   task_id_t registerTask(std::string name, Task&& task);
@@ -92,7 +92,6 @@ class Scheduler {
   bool requestSuspend(task_id_t id);
   bool requestResume(task_id_t id);
   void removeReady(std::coroutine_handle<> h);
-  void cleanTask(std::coroutine_handle<> h);
   void run();
 };
 

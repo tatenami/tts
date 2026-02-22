@@ -34,14 +34,14 @@ bool TimerBridge::addRequest(task_id_t id, uint64_t ns) {
 }
 
 bool TimerBridge::hasExpiredIDs() const {
-  int count;
-  int ret = ioctl(fd_, TTS_GET_EXPIRED_COUNT_CMD, &count);
+  uint8_t has_expired;
+  int ret = ioctl(fd_, TTS_HAS_EXPIRED_CMD, &has_expired);
 
   if (ret < 0) {
     return false;
   }
 
-  return (count > 0) ? true : false;
+  return (has_expired == 1);
 }
 
 void TimerBridge::wait(int32_t timeout_ms) {
@@ -49,9 +49,15 @@ void TimerBridge::wait(int32_t timeout_ms) {
   poll(&fds, 1, timeout_ms);
 }
 
-size_t TimerBridge::readExpiredIDs(task_id_t *buf, size_t max_ids) {
-  int bytes = read(fd_, buf, max_ids);
-  return (bytes < 0) ? 0 : bytes;
+expired_bitmap_t TimerBridge::readExpiredIDMap() {
+  expired_bitmap_t bitmap;
+  
+  int ret = ioctl(fd_, TTS_GET_EXPIRED_BITMAP_CMD, &bitmap);
+  if (ret < 0) {
+    return 0;
+  }
+
+  return bitmap; 
 }
 
 }
