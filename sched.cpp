@@ -14,6 +14,7 @@
 namespace tts 
 {
 
+/* Task ID Allocator */
 task_id_t TaskIDAllocator::allocate() {
   task_id_t id;
   if (!free_ids_.empty()) {
@@ -31,7 +32,51 @@ void TaskIDAllocator::free(task_id_t id) {
   free_ids_.push(id);
 }
 
-task_id_t Scheduler::registerTask(std::string name, Task&& task) {
+/* Ready Queue */
+ReadyQueue::ReadyQueue() {
+  // 各優先度のキューを初期化
+  for (size_t i = 0; i < priority_count_; i++) {
+    queues_[i] = std::queue<TaskControlBlock*>();
+  }
+}
+
+ReadyQueue::~ReadyQueue() {
+
+}
+
+TaskControlBlock* ReadyQueue::pop() {
+  // 優先度の高い順にキューを検索して，最初に見つかったタスクを返す
+  for (size_t i = 0; i < priority_count_; i++) {
+    if (queues_[i].empty()) {
+      continue;
+    }
+
+    // 先頭のタスクを取り出す
+    TaskControlBlock* tcb = queues_[i].front();
+    queues_[i].pop();
+    if (tcb->state != TaskState::Ready) {
+      // Ready 状態でないタスクはスキップ
+      continue;
+    }
+
+    return tcb;
+  }
+
+  return nullptr;
+}
+
+void ReadyQueue::push(TaskControlBlock* tcb) {
+  size_t priority = static_cast<size_t>(tcb->priority);
+  queues_[priority].push(tcb);
+}
+
+size_t ReadyQueue::size(TaskPriority priority) const {
+  size_t p = static_cast<size_t>(priority);
+  return queues_[p].size();
+}
+
+/* Scheduler */
+task_id_t Scheduler::registerTask(std::string name, Task&& task, TaskPriority priority = TaskPriority::Normal) {
   if (name_to_id_.contains(name)) {
     std::printf("[sched] ERR: duplication task name: %s\n", name.c_str());
     task.handler.destroy();
@@ -42,7 +87,7 @@ task_id_t Scheduler::registerTask(std::string name, Task&& task) {
   std::unique_ptr<TaskControlBlock> tcb;
 
   tcb = std::make_unique<TaskControlBlock>(
-    id, TaskState::Ready, std::move(task.handler)
+    id, TaskState::Ready, priority, std::move(task.handler)
   );
 
   // 各マップに登録
@@ -105,6 +150,7 @@ bool Scheduler::requestResume(task_id_t id) {
 
 bool Scheduler::requestSleep(std::coroutine_handle<> h, uint64_t sleep_ns) {
   TaskControlBlock& tcb = getTCBFromHandler(h);
+
   if (tcb.state != TaskState::Running) {
     return false;
   }
@@ -113,17 +159,30 @@ bool Scheduler::requestSleep(std::coroutine_handle<> h, uint64_t sleep_ns) {
   if (sleep_ns == 0) {
     enqueueReady(h);
   }
-
-  if (!kernel_timer_.addRequest(tcb.id, sleep_ns)) {
-    return false;
+  else {
+    if (!kernel_timer_.addRequest(tcb.id, sleep_ns)) {
+      return false;
+    }
   }
 
   tcb.state = TaskState::Blocked;
   return true;
 }
 
-void Scheduler::requestAbort(task_id_t id) {
-  
+void Scheduler::abortSleep(task_id_t id) {
+  TaskControlBlock& tcb = *(tcb_list_.at(id));
+
+  // Blocked 状態でなければスキップ
+  if (tcb.state != TaskState::Blocked) {
+    return;
+  }
+
+  kernel_timer_.abortSleepTimer(id);
+
+  if (tcb.state == TaskState::Blocked) {
+    tcb.state = TaskState::Ready;
+    ready_queue_.push(&tcb);
+  }
 }
 
 void Scheduler::removeReady(std::coroutine_handle<> h) {
@@ -134,45 +193,59 @@ void Scheduler::removeReady(std::coroutine_handle<> h) {
   }
 }
 
+void Scheduler::pushReadyExpired() {
+  expired_bitmap_t bitmap = kernel_timer_.readExpiredIDMap();
+
+  for (int i = 0; i < num_tasks_; i++) {
+    // ビットが立っていないIDをスキップ
+    if (((bitmap >> i) & 0x01) == 0) {
+      continue;
+    }
+
+    // スリープが終了した ID のタスクを Ready Queue に push
+    TaskControlBlock& tcb = *(tcb_list_.at(i));
+    
+    if (tcb.state == TaskState::Blocked) {  
+      tcb.state = TaskState::Ready;
+      ready_queue_.push(&tcb);
+    }
+  }
+}
+
 void Scheduler::run() {
   LOG_PRINT("[sched] run.\n");
 
-  for (int i = 0; i < num_tasks_; i++) {
+  // すべてのタスクを Ready にする
+  for (task_id_t i = 0; i < num_tasks_; i++) {
     enqueueReady(i);
   }
 
+  // 全タスクが Finished になるまでスケジューリング
   while (!allTaskFinished()) {
-    if (ready_queue_.empty()) {
+
+    // Ready Queue からタスクを取り出す
+    TaskControlBlock* tcb = ready_queue_.pop();
+    if (tcb == nullptr) {
+      // Ready Queue が空なら，スリープ中のタイマーの経過を待ち
+      // スリープが終了したタスクを Ready Queue に push
       if (!kernel_timer_.hasExpiredIDs()) {
         kernel_timer_.wait();
+        pushReadyExpired();
+        tcb = ready_queue_.pop();
       }
     }
 
+    // スリープが終了したタスクを Ready Queue に push
     if (kernel_timer_.hasExpiredIDs()) { 
-      expired_bitmap_t bitmap = kernel_timer_.readExpiredIDMap();
-
-      for (int i = 0; i < num_tasks_; i++) {
-        // ビットが立っていないIDをスキップ
-        if (((bitmap >> i) & 0x01) == 0) {
-          continue;
-        }
-
-        TaskControlBlock& tcb = *(tcb_list_.at(i));
-        
-        if (tcb.state == TaskState::Blocked) {  
-          tcb.state = TaskState::Ready;
-          ready_queue_.push(&tcb);
-        }
-      }
+      pushReadyExpired();
     }
 
-    TaskControlBlock* tcb = ready_queue_.front();
-    ready_queue_.pop();
-
+    // Ready 状態でないタスクはスキップ (suspend されたタスクなど)
     if (tcb->state != TaskState::Ready) {
       continue;
     }
 
+    // タスクを Run にして，コルーチンを再開
     LOG_PRINTF("[sched] resume task(id=%d)\n", (int)(tcb->id));
     tcb->state = TaskState::Running;
     running_task_id_ = tcb->id;

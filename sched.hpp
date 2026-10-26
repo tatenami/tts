@@ -23,9 +23,19 @@ class TaskIDAllocator {
   void free(task_id_t id);
 };
 
-class SleepTimerHandler {
+// Ready Queue
+class ReadyQueue {
  private:
-  int fd_;
+  static const size_t priority_count_{static_cast<size_t>(TaskPriority::Count)};
+  std::array<std::queue<TaskControlBlock*>, priority_count_> queues_;
+
+ public:
+  ReadyQueue();
+  ~ReadyQueue();
+
+  TaskControlBlock* pop();
+  void   push(TaskControlBlock* tcb);
+  size_t size(TaskPriority priority) const;
 };
 
 // スケジューラは singleton
@@ -41,7 +51,7 @@ class Scheduler {
   std::array<std::unique_ptr<TaskControlBlock>, MAX_TASK_NUM> tcb_list_;
   std::unordered_map<std::string, task_id_t> name_to_id_;
   std::unordered_map<HandlerAddr, task_id_t> handler_to_id_;
-  std::queue<TaskControlBlock*> ready_queue_;
+  ReadyQueue ready_queue_;
   std::queue<TaskControlBlock*> finish_queue_;
   TaskIDAllocator id_allocator_;
   TimerBridge kernel_timer_;
@@ -61,6 +71,8 @@ class Scheduler {
   bool allTaskFinished() {
     return (num_tasks_ == finish_queue_.size());
   }
+
+  void pushReadyExpired();
 
  public:
   Scheduler(const Scheduler&) = delete;
@@ -85,13 +97,17 @@ class Scheduler {
     return (tcb_list_.at(id)).get()->state;
   }
 
-  task_id_t registerTask(std::string name, Task&& task);
+  TaskPriority getTaskPriority(task_id_t id) {
+    return (tcb_list_.at(id)).get()->priority;
+  }
+
+  task_id_t registerTask(std::string name, Task&& task, TaskPriority priority);
   void enqueueReady(std::coroutine_handle<> h);
   void enqueueFinish(std::coroutine_handle<> h);
   bool requestSleep(std::coroutine_handle<> h, uint64_t sleep_ns);
   bool requestSuspend(task_id_t id);
   bool requestResume(task_id_t id);
-  void requestAbort(task_id_t id);
+  void abortSleep(task_id_t id);
   void removeReady(std::coroutine_handle<> h);
   void run();
 };

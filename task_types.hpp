@@ -8,9 +8,7 @@
 namespace tts 
 {
 
-using task_id_t = uint8_t;
-constexpr task_id_t NameDuplicationErr = (MAX_TASK_NUM + 1);
-
+// タスクの状態
 enum class TaskState {
   Ready,
   Running,
@@ -19,15 +17,27 @@ enum class TaskState {
   Finished,
 };
 
+// タスクの優先度
+enum class TaskPriority {
+  Low,
+  Normal,
+  High,
+  Count,
+};
+
+using task_id_t = uint8_t;
+constexpr task_id_t NameDuplicationErr = (MAX_TASK_NUM + 1);
+
 struct Task;
 
 struct TaskControlBlock {
   task_id_t id;
   TaskState state;
+  TaskPriority priority;
   std::coroutine_handle<> handler;
 
-  TaskControlBlock(task_id_t id_, TaskState state_, std::coroutine_handle<> handler_):
-    id(id_), state(state_), handler(handler_) 
+  TaskControlBlock(task_id_t id_, TaskState state_, TaskPriority priority_, std::coroutine_handle<> handler_):
+    id(id_), state(state_), priority(priority_), handler(handler_) 
     {
 
     }
