@@ -17,11 +17,11 @@ enum class TaskState {
   Finished,
 };
 
-// タスクの優先度
+// タスクの優先度 (値が小さいほど優先度が高い)
 enum class TaskPriority {
-  Low,
-  Normal,
   High,
+  Normal,
+  Low,
   Count,
 };
 
@@ -31,10 +31,10 @@ constexpr task_id_t NameDuplicationErr = (MAX_TASK_NUM + 1);
 struct Task;
 
 struct TaskControlBlock {
-  task_id_t id;
-  TaskState state;
-  TaskPriority priority;
-  std::coroutine_handle<> handler;
+  task_id_t id; // タスクID
+  TaskState state; // タスクの実行状態
+  TaskPriority priority; // タスクの優先度
+  std::coroutine_handle<> handler; // タスクのコルーチンハンドラー
 
   TaskControlBlock(task_id_t id_, TaskState state_, TaskPriority priority_, std::coroutine_handle<> handler_):
     id(id_), state(state_), priority(priority_), handler(handler_) 

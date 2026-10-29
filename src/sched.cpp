@@ -11,6 +11,10 @@
 #include <unistd.h>
 #include <errno.h>
 
+#include <cstdio>
+
+using namespace std;
+
 namespace tts 
 {
 
@@ -54,8 +58,10 @@ TaskControlBlock* ReadyQueue::pop() {
     // 先頭のタスクを取り出す
     TaskControlBlock* tcb = queues_[i].front();
     queues_[i].pop();
-    if (tcb->state != TaskState::Ready) {
-      // Ready 状態でないタスクはスキップ
+
+    // Ready 状態でない or 優先度が異なるタスクはスキップ
+    if (tcb->state != TaskState::Ready || 
+        tcb->priority != static_cast<TaskPriority>(i)) {
       continue;
     }
 

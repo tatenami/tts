@@ -30,10 +30,10 @@ struct TaskPromise {
       std::coroutine_handle<TaskPromise>::from_promise(*this)
     }; 
   }
-  std::suspend_always initial_suspend() { return {}; }
+  std::suspend_always initial_suspend() { return {}; } // 初期化時に suspend
   TaskFinalAwaiter final_suspend() noexcept { return TaskFinalAwaiter{}; }
   void return_void() {};
-  void unhandled_exception() { std::terminate(); }
+  void unhandled_exception() { std::terminate(); } // 未処理例外が発生した場合は terminate
 };
 
 }
